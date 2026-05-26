@@ -1,0 +1,460 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="通勤HP">
+<meta name="theme-color" content="#ff69b4">
+<title>通勤HPメーター</title>
+
+<!-- PWA manifest inline via JS (no separate file needed) -->
+<script>
+const manifestData = {
+  name: "通勤HPメーター",
+  short_name: "通勤HP",
+  description: "通勤のHPを記録するアプリ",
+  start_url: ".",
+  display: "standalone",
+  background_color: "#fff8fc",
+  theme_color: "#ff69b4",
+  orientation: "portrait",
+  icons: [
+    { src: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'%3E%3Crect width='192' height='192' rx='40' fill='%23ff69b4'/%3E%3Ctext x='96' y='130' font-size='100' text-anchor='middle'%3E🚃%3C/text%3E%3C/svg%3E", sizes: "192x192", type: "image/svg+xml" },
+    { src: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' rx='100' fill='%23ff69b4'/%3E%3Ctext x='256' y='340' font-size='280' text-anchor='middle'%3E🚃%3C/text%3E%3C/svg%3E", sizes: "512x512", type: "image/svg+xml" }
+  ]
+};
+const blob = new Blob([JSON.stringify(manifestData)], {type:'application/json'});
+const manifestURL = URL.createObjectURL(blob);
+document.write('<link rel="manifest" href="' + manifestURL + '">');
+</script>
+
+<!-- Service Worker registration -->
+<script>
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    const swCode = `
+const CACHE = 'commute-hp-v1';
+self.addEventListener('install', e => {
+  e.waitUntil(caches.open(CACHE).then(c => c.addAll(['./'])));
+  self.skipWaiting();
+});
+self.addEventListener('activate', e => {
+  e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k=>k!==CACHE).map(k=>caches.delete(k)))));
+  self.clients.claim();
+});
+self.addEventListener('fetch', e => {
+  e.respondWith(caches.match(e.request).then(r => r || fetch(e.request).catch(() => new Response('offline'))));
+});
+    `;
+    const swBlob = new Blob([swCode], {type:'application/javascript'});
+    const swURL = URL.createObjectURL(swBlob);
+    navigator.serviceWorker.register(swURL).catch(()=>{});
+  });
+}
+</script>
+
+<style>
+:root {
+  --pink: #ff69b4;
+  --pink-dark: #e05599;
+  --pink-light: #ff9ac7;
+  --pink-pale: #fff0f7;
+  --pink-bg: #fff8fc;
+  --text: #2d2633;
+  --text-sub: #766b77;
+  --border: #ead9e3;
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { height: 100%; overscroll-behavior: none; }
+body {
+  margin: 0;
+  background: var(--pink-bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", sans-serif;
+  padding-bottom: calc(80px + var(--safe-bottom));
+}
+
+/* ── Top bar ── */
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  background: var(--pink);
+  padding: calc(var(--safe-top) + 14px) 16px 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  box-shadow: 0 2px 12px rgba(255,105,180,.3);
+}
+.topbar-icon { font-size: 22px; }
+.topbar-title { font-size: 17px; font-weight: 800; color: white; flex: 1; }
+.topbar-sub { font-size: 11px; color: rgba(255,255,255,.75); }
+
+/* ── Bottom nav ── */
+.bottomnav {
+  position: fixed;
+  bottom: 0; left: 0; right: 0;
+  z-index: 100;
+  background: white;
+  border-top: 1px solid var(--border);
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  padding-bottom: var(--safe-bottom);
+  box-shadow: 0 -4px 16px rgba(0,0,0,.08);
+}
+.taббtn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  gap: 3px;
+  font-family: inherit;
+  transition: all 0.15s;
+}
+.taббtn .tab-icon { font-size: 22px; }
+.taббtn .tab-label { font-size: 10px; font-weight: 700; color: #bbb; }
+.taббtn.active .tab-label { color: var(--pink); }
+.taббtn.active .tab-icon { transform: scale(1.15); }
+
+/* ── Sections ── */
+.section { display: none; padding: 14px; max-width: 680px; margin: 0 auto; }
+.section.visible { display: block; }
+
+/* ── Card ── */
+.card {
+  background: white;
+  border: 1px solid #ffe0ee;
+  border-radius: 18px;
+  padding: 16px;
+  margin-bottom: 14px;
+  box-shadow: 0 4px 16px rgba(255,105,180,.1);
+}
+.card h2 { font-size: 17px; margin: 0 0 12px; }
+.card p { font-size: 13px; color: var(--text-sub); line-height: 1.6; margin: 0 0 10px; }
+
+/* ── Route ── */
+.routeWrap { overflow-x: auto; -webkit-overflow-scrolling: touch; padding: 12px 0; }
+.route { display: flex; position: relative; min-width: 1850px; padding-top: 22px; }
+.route:before {
+  content: "";
+  position: absolute; left: 30px; right: 30px; top: 36px;
+  height: 10px; background: var(--pink-light); border-radius: 999px;
+}
+.station { position: relative; z-index: 1; width: 74px; flex: 0 0 74px; text-align: center; }
+.dot { width: 24px; height: 24px; border-radius: 50%; border: 6px solid var(--pink); background: white; margin: 0 auto 8px; }
+.name { font-weight: 800; font-size: 12px; line-height: 1.3; height: 48px; }
+.level { width: 52px; padding: 6px; border-radius: 8px; border: 1px solid var(--border); font-family: inherit; font-size: 14px; }
+.meter { width: 18px; height: 72px; margin: 8px auto; background: #f2e6ed; border-radius: 999px; overflow: hidden; display: flex; align-items: flex-end; }
+.fill { width: 100%; border-radius: 999px 999px 0 0; transition: height 0.3s ease, background 0.3s ease; }
+.note { width: 68px; height: 48px; font-size: 11px; padding: 5px; border: 1px solid var(--border); border-radius: 8px; font-family: inherit; }
+
+/* ── Form elements ── */
+label { display: block; margin: 10px 0 5px; font-size: 12px; color: var(--text-sub); font-weight: 600; }
+input, select, textarea {
+  width: 100%; border: 1.5px solid var(--border); border-radius: 12px;
+  padding: 12px 14px; font-size: 16px; background: white; font-family: inherit;
+  transition: border-color 0.2s;
+  -webkit-appearance: none;
+  appearance: none;
+}
+input:focus, select:focus, textarea:focus { outline: none; border-color: var(--pink); }
+textarea { resize: vertical; min-height: 72px; }
+.row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+/* ── Buttons ── */
+.btn {
+  width: 100%; border: 0; border-radius: 14px; padding: 16px;
+  background: var(--pink); color: white; font-weight: 900; font-size: 16px;
+  margin-top: 12px; font-family: inherit; cursor: pointer;
+  transition: transform 0.1s, box-shadow 0.1s;
+  box-shadow: 0 4px 14px rgba(255,105,180,.35);
+  -webkit-appearance: none;
+}
+.btn:active { transform: scale(0.97); box-shadow: none; }
+.btn.white { background: white; color: var(--pink-dark); border: 1.5px solid var(--pink-light); box-shadow: none; }
+
+/* ── Stats ── */
+.stats-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
+.stat-box { background: var(--pink-pale); border-radius: 14px; padding: 14px; text-align: center; }
+.stat-label { font-size: 12px; color: var(--text-sub); font-weight: 600; }
+.big { font-size: 32px; color: var(--pink); font-weight: 900; margin-top: 4px; }
+
+/* ── Pills ── */
+.pill { display: inline-block; background: var(--pink-pale); color: #b91f5c; border-radius: 999px; padding: 4px 10px; margin: 2px; font-size: 12px; font-weight: 600; }
+
+/* ── History ── */
+.history { border-top: 1px solid #f0dbe7; padding: 12px 0; }
+.history b { font-size: 14px; }
+.history .memo { font-size: 13px; color: var(--text-sub); margin-top: 4px; }
+
+/* ── Toast ── */
+.toast {
+  position: fixed; bottom: calc(90px + var(--safe-bottom)); left: 50%; transform: translateX(-50%);
+  background: #2d2633; color: white; padding: 12px 20px; border-radius: 12px;
+  font-size: 14px; font-weight: 700; z-index: 200; white-space: nowrap;
+  animation: toastIn 0.3s ease, toastOut 0.3s ease 1.7s forwards;
+  pointer-events: none;
+}
+@keyframes toastIn { from { opacity:0; transform: translateX(-50%) translateY(10px); } to { opacity:1; transform: translateX(-50%) translateY(0); } }
+@keyframes toastOut { to { opacity:0; transform: translateX(-50%) translateY(10px); } }
+
+/* ── Install banner ── */
+.install-banner {
+  background: linear-gradient(135deg, var(--pink), var(--pink-dark));
+  border-radius: 16px;
+  padding: 14px 16px;
+  margin-bottom: 14px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  box-shadow: 0 4px 14px rgba(255,105,180,.3);
+}
+.install-banner-text { flex: 1; color: white; }
+.install-banner-text b { font-size: 14px; display: block; margin-bottom: 2px; }
+.install-banner-text span { font-size: 12px; opacity: 0.85; }
+.install-btn {
+  background: white; color: var(--pink-dark);
+  border: none; border-radius: 10px; padding: 10px 14px;
+  font-size: 13px; font-weight: 800; font-family: inherit;
+  cursor: pointer; white-space: nowrap; flex-shrink: 0;
+}
+</style>
+</head>
+<body>
+
+<!-- Top bar -->
+<div class="topbar">
+  <span class="topbar-icon">🚃</span>
+  <span class="topbar-title">通勤HPメーター ฅ^•ω•^ฅ</span>
+</div>
+
+<!-- Sections -->
+<div id="sec-route" class="section visible">
+  <div id="installBanner" class="install-banner" style="display:none">
+    <div class="install-banner-text">
+      <b>📱 ホーム画面に追加</b>
+      <span>アプリとして使えるようになるにゃ</span>
+    </div>
+    <button class="install-btn" id="installBtn">追加する</button>
+  </div>
+
+  <div class="card">
+    <h2>🗺️ 路線図＋駅ごとの辛さ</h2>
+    <p>横にスワイプ。辛さ度を変えて「駅データを保存」を押すにゃ。</p>
+    <div class="routeWrap">
+      <div class="route" id="routeEl"></div>
+    </div>
+    <button class="btn" id="saveStations">💾 駅データを保存</button>
+  </div>
+</div>
+
+<div id="sec-today" class="section">
+  <div class="card">
+    <h2>📝 今日のログ</h2>
+    <div class="row">
+      <div><label>日付</label><input type="date" id="date"></div>
+      <div><label>車両</label>
+        <select id="car">
+          <option>2号車</option><option>4号車</option><option selected>10号車</option><option>その他</option>
+        </select>
+      </div>
+    </div>
+    <div class="row">
+      <div><label>座れた？</label>
+        <select id="seat">
+          <option>座れた</option><option>途中から座れた</option><option>座れない</option>
+        </select>
+      </div>
+      <div><label>HP削れ度</label>
+        <select id="hp"><option>1</option><option>2</option><option selected>3</option><option>4</option><option>5</option></select>
+      </div>
+    </div>
+    <label>メモ</label>
+    <textarea id="memo" placeholder="例：10号車は座れた。東池袋〜護国寺が地獄。"></textarea>
+    <button class="btn" id="saveRide">✅ 今日のログを保存</button>
+  </div>
+</div>
+
+<div id="sec-month" class="section">
+  <div class="card">
+    <h2>📊 1ヶ月データ</h2>
+    <div class="stats-row">
+      <div class="stat-box"><div class="stat-label">記録数</div><div id="days" class="big">0</div></div>
+      <div class="stat-box"><div class="stat-label">平均HP</div><div id="avg" class="big">-</div></div>
+    </div>
+    <div id="summary"></div>
+    <button class="btn white" id="refresh">🔄 データを更新</button>
+  </div>
+  <div class="card">
+    <h2>📋 履歴</h2>
+    <div id="history"></div>
+  </div>
+</div>
+
+<!-- Bottom nav -->
+<nav class="bottomnav">
+  <button class="taббtn active" id="tab-route" onclick="switchTab('route')">
+    <span class="tab-icon">🗺️</span>
+    <span class="tab-label">路線図</span>
+  </button>
+  <button class="taббtn" id="tab-today" onclick="switchTab('today')">
+    <span class="tab-icon">📝</span>
+    <span class="tab-label">今日</span>
+  </button>
+  <button class="taббtn" id="tab-month" onclick="switchTab('month')">
+    <span class="tab-icon">📊</span>
+    <span class="tab-label">1ヶ月</span>
+  </button>
+</nav>
+
+<script>
+// ── Stations data ─────────────────────────────────────────────────────────────
+const STATIONS = [
+  {name:"鶴瀬",default:2},{name:"みずほ台",default:2},{name:"柳瀬川",default:2},
+  {name:"志木",default:4},{name:"朝霞台",default:2},{name:"朝霞",default:2},
+  {name:"和光市",default:2},{name:"地下鉄成増",default:2},{name:"地下鉄赤塚",default:2},
+  {name:"平和台",default:2},{name:"氷川台",default:2},{name:"小竹向原",default:2},
+  {name:"千川",default:2},{name:"要町",default:2},{name:"池袋",default:5},
+  {name:"東池袋",default:2},{name:"護国寺",default:2},{name:"江戸川橋",default:4},
+  {name:"飯田橋",default:2},{name:"市ケ谷",default:2},{name:"麹町",default:2},
+  {name:"永田町",default:2},{name:"桜田門",default:2},{name:"有楽町",default:1},
+  {name:"銀座一丁目",default:1}
+];
+
+const prefix = "commute_v8_";
+function load(k,f){try{return JSON.parse(localStorage.getItem(prefix+k))??f}catch(e){return f}}
+function save(k,v){localStorage.setItem(prefix+k,JSON.stringify(v))}
+function esc(s){return String(s||"").replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]))}
+function todayStr(){const d=new Date();return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0")}
+
+// ── Toast ─────────────────────────────────────────────────────────────────────
+function toast(msg) {
+  document.querySelectorAll('.toast').forEach(t=>t.remove());
+  const t = document.createElement('div');
+  t.className = 'toast';
+  t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(()=>t.remove(), 2100);
+}
+
+// ── Tab switching ─────────────────────────────────────────────────────────────
+function switchTab(name) {
+  document.querySelectorAll('.section').forEach(s=>s.classList.remove('visible'));
+  document.querySelectorAll('.taббtn').forEach(b=>b.classList.remove('active'));
+  document.getElementById('sec-'+name).classList.add('visible');
+  document.getElementById('tab-'+name).classList.add('active');
+  if (name==='month') renderMonth();
+}
+
+// ── Build route HTML ──────────────────────────────────────────────────────────
+function buildRoute() {
+  const routeEl = document.getElementById('routeEl');
+  const stored = load('stations', {});
+  routeEl.innerHTML = STATIONS.map((st, i) => {
+    const saved = stored[st.name];
+    const lv = saved ? saved.level : st.default;
+    const note = saved ? (saved.note||'') : '';
+    const opts = [1,2,3,4,5].map(v=>`<option value="${v}"${v===lv?' selected':''}>${v}</option>`).join('');
+    return `
+      <div class="station" data-name="${st.name}">
+        <div class="dot"></div>
+        <div class="name">${i+1}. ${st.name}</div>
+        <select class="level">${opts}</select>
+        <div class="meter"><div class="fill"></div></div>
+        <textarea class="note" placeholder="メモ">${esc(note)}</textarea>
+      </div>`;
+  }).join('');
+  document.querySelectorAll('.level').forEach(x=>x.addEventListener('change', updateMeters));
+  updateMeters();
+}
+
+function updateMeters() {
+  document.querySelectorAll('.station').forEach(st=>{
+    const lv = Number(st.querySelector('.level').value);
+    const fill = st.querySelector('.fill');
+    fill.style.height = (lv*20)+'%';
+    fill.style.background = lv===1?'#8fd19e':lv===2?'#b7d96a':lv===3?'#ffbf69':lv===4?'#ff7b93':'#ff3366';
+  });
+}
+
+document.getElementById('saveStations').addEventListener('click', ()=>{
+  const data={};
+  document.querySelectorAll('.station').forEach(st=>{
+    data[st.dataset.name]={level:Number(st.querySelector('.level').value),note:st.querySelector('.note').value};
+  });
+  save('stations',data);
+  toast('✅ 駅データ保存したにゃん！');
+});
+
+// ── Today ─────────────────────────────────────────────────────────────────────
+document.getElementById('date').value = todayStr();
+
+document.getElementById('saveRide').addEventListener('click', ()=>{
+  const rides = load('rides',[]);
+  rides.unshift({
+    date: date.value, car: car.value, seat: seat.value,
+    hp: Number(hp.value), memo: memo.value, created: Date.now()
+  });
+  save('rides', rides);
+  memo.value = '';
+  toast('✅ 今日のログ保存したにゃん！');
+});
+
+// ── Month ─────────────────────────────────────────────────────────────────────
+function renderMonth() {
+  const rides = load('rides',[]);
+  const cutoff = Date.now()-31*24*60*60*1000;
+  const recent = rides.filter(r=>new Date(r.date).getTime()>=cutoff);
+  document.getElementById('days').textContent = recent.length;
+  document.getElementById('avg').textContent = recent.length
+    ? (recent.reduce((a,b)=>a+Number(b.hp),0)/recent.length).toFixed(1) : '-';
+
+  const by={};
+  recent.forEach(r=>{by[r.car]??=[];by[r.car].push(r)});
+  document.getElementById('summary').innerHTML = Object.keys(by).map(c=>{
+    const arr=by[c];
+    const av=(arr.reduce((a,b)=>a+Number(b.hp),0)/arr.length).toFixed(1);
+    const seat=Math.round(arr.filter(r=>String(r.seat).includes('座れた')).length/arr.length*100);
+    return `<div class="history"><b>${esc(c)}</b><br><span class="pill">平均HP ${av}</span><span class="pill">座れた率 ${seat}%</span><span class="pill">${arr.length}件</span></div>`;
+  }).join('') || "<div class='history'>まだデータなしにゃ。</div>";
+
+  document.getElementById('history').innerHTML = recent.map(r=>
+    `<div class="history"><b>${esc(r.date)}｜${esc(r.car)}</b><br><span class="pill">${esc(r.seat)}</span><span class="pill">HP ${esc(r.hp)}</span><div class="memo">${esc(r.memo)}</div></div>`
+  ).join('') || "<div class='history'>まだ履歴なしにゃ。</div>";
+}
+document.getElementById('refresh').addEventListener('click', renderMonth);
+
+// ── PWA Install ───────────────────────────────────────────────────────────────
+let deferredPrompt = null;
+window.addEventListener('beforeinstallprompt', e => {
+  e.preventDefault();
+  deferredPrompt = e;
+  document.getElementById('installBanner').style.display = 'flex';
+});
+document.getElementById('installBtn').addEventListener('click', async () => {
+  if (!deferredPrompt) return;
+  deferredPrompt.prompt();
+  const { outcome } = await deferredPrompt.userChoice;
+  deferredPrompt = null;
+  document.getElementById('installBanner').style.display = 'none';
+  if (outcome === 'accepted') toast('🎉 ホーム画面に追加したにゃ！');
+});
+window.addEventListener('appinstalled', ()=>{
+  document.getElementById('installBanner').style.display = 'none';
+});
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+buildRoute();
+renderMonth();
+</script>
+</body>
+</html>
